@@ -208,13 +208,12 @@ def summarize_performance(performance):
 
 if __name__ == "__main__":
 
-
     args = parse_args()
 
     if args.datadir is None:
         datadir_base = Path("/Users/poldrack/Dropbox/code/cognitive-encoding-models_multitask")
     else:
-        datadir_base = args.datadir
+        datadir_base = Path(args.datadir)
 
     mapdir = datadir_base / 'results/em-0/parcellated_maps'
     resourcedir = datadir_base / 'resources'
@@ -227,11 +226,8 @@ if __name__ == "__main__":
 
     maps = load_parcellated_maps(mapdir, 1)
 
-    if args.subcodes is not None:
-        subcodes = args.subcodes
-    else:
-        subcodes = get_subcodes(maps)
-
+    subcodes = args.subcodes if args.subcodes is not None else get_subcodes(maps)
+    
     encoding_models = {}
     predicted_maps = {}
     performance = {}
@@ -263,7 +259,7 @@ if __name__ == "__main__":
 
     accuracy_df, mapwise_scores, regionwise_scores, predictions = summarize_performance(performance)
     accuracy_df.to_csv(outdir / f'accuracy_{ontology}_{method}.csv')
- 
+
     with open(outdir / f'mapwise_scores_{ontology}_{method}.pkl', 'wb') as f:
         pickle.dump(mapwise_scores, f)
 
