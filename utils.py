@@ -42,14 +42,12 @@ def get_df_r2score(df1, df2):
     return(pd.Series(r2score))
 
 
-def get_regionwise_accuracy(predicted, sub_df, measure='r2'):
+def get_regionwise_accuracy(predicted, sub_df):
     """
     compute r/r2 within each region across all contrasts
 
     measure (str): either 'r2' (for sklearn r2_score) or 'r' (for pearson r)
     """
-
-    assert measure in ('r2', 'r')
 
     pred_array = []
     pred_keys = []
@@ -68,9 +66,5 @@ def get_regionwise_accuracy(predicted, sub_df, measure='r2'):
         mean_prediction_per_contrast[contrast] = contrast_df.mean(axis=0)
 
     mean_prediction_df = pd.DataFrame(mean_prediction_per_contrast).T
-    if measure == 'r':
-        # return columnwise (region) correlation between mean prediction and true data
-        # corrwith() automatically aligns data frames before computing correlation
-        return mean_prediction_df.corrwith(sub_df, axis=0)
-    else:
-        return get_df_r2score(mean_prediction_df, sub_df)
+    return({'r': mean_prediction_df.corrwith(sub_df, axis=0),
+            'r2': get_df_r2score(mean_prediction_df, sub_df)})
