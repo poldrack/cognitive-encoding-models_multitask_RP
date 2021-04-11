@@ -144,7 +144,8 @@ def get_test_performance(predicted, sub_df):
 def summarize_performance(performance):
 
     accuracy_by_subject = None
-    r2_scores_df = None
+    r2_scores_mapwise_df = None
+    r2_scores_regionwise = {}
 
     for subject, perf in performance.items():
         acc_values = np.array(list(perf[0].values()))
@@ -177,14 +178,15 @@ def summarize_performance(performance):
         r2_subject['pair_id'] = pair_id
         r2_subject['map_id'] = map_id
 
-        if r2_scores_df is None:
-            r2_scores_df = r2_subject
+        if r2_scores_mapwise_df is None:
+            r2_scores_mapwise_df = r2_subject
         else:
-            r2_scores_df = pd.concat((r2_scores_df, r2_subject))
+            r2_scores_mapwise_df = pd.concat((r2_scores_mapwise_df, r2_subject))
 
+        r2_scores_regionwise[subject] = perf[2]
     accuracy_by_subject['subcode'] = accuracy_by_subject.index
     accuracy_df = pd.melt(accuracy_by_subject, id_vars='subcode')
-    return(accuracy_df, r2_scores_df)
+    return(accuracy_df, r2_scores_mapwise_df, r2_scores_regionwise)
 
 
 if __name__ == "__main__":
@@ -234,6 +236,9 @@ if __name__ == "__main__":
     with open(outdir / f'peformance_{ontology}_{method}.pkl', 'wb') as f:
         pickle.dump(performance, f)
 
-    accuracy_df, r2_scores_df = summarize_performance(performance)
+    accuracy_df, r2_scores_df, r2_scores_mapwise = summarize_performance(performance)
     accuracy_df.to_csv(outdir / f'accuracy_{ontology}_{method}.csv')
-    r2_scores_df.to_csv(outdir / f'r2_scores_{ontology}_{method}.csv')
+    r2_scores_df.to_csv(outdir / f'r2_mapwise_{ontology}_{method}.csv')
+    with open(outdir / f'r2_regionwise_{ontology}_{method}.pkl', 'wb') as f:
+        pickle.dump(r2_scores_mapwise, f)
+    
