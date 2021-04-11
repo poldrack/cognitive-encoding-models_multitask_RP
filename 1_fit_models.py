@@ -13,16 +13,17 @@ import sklearn
 import argparse
 
 from encoding_model import EncodingModel
-from utils import get_prediction_accuracy, get_regionwise_r2score
+from utils import get_prediction_accuracy, get_regionwise_accuracy
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-v',"--verbose", help="increase output verbosity",
+    parser.add_argument('-v', "--verbose", help="increase output verbosity",
                         default=0, action='count')
-    parser.add_argument('-m',"--method", help="regression method",
-                            default='ridgecv')
-    parser.add_argument('-o',"--ontology", help="ontology for model",
-                            default='all')
+    parser.add_argument('-m', "--method", help="regression method",
+                        default='ridgecv')
+    parser.add_argument('-o', "--ontology", help="ontology for model",
+                        default='all')
     parser.add_argument('-s', "--shuffle", help="shuffle for null model",
                         action='store_true')
     return(parser.parse_args())
@@ -127,18 +128,19 @@ def get_test_performance(predicted, sub_df):
 
     accuracy = {}
     r2score_mapwise = {}
+    predictions = {}
 
     for key, predicted_maps in predicted.items():
         true_maps = sub_df.loc[key, :].values
-        accuracy[key] = get_prediction_accuracy(predicted_maps, true_maps)
+        accuracy[key], predictions[key] = get_prediction_accuracy(predicted_maps, true_maps)
 
         r2score_mapwise[key] = [r2_score(true_maps[0, :], predicted_maps[0, :]),
                                 r2_score(true_maps[1, :], predicted_maps[1, :])]
 
     # get regionwise r2score
-    r2score_regionwise = get_regionwise_r2score(predicted, sub_df)
+    r2score_regionwise = get_regionwise_accuracy(predicted, sub_df, measure='r2')
 
-    return((accuracy, r2score_mapwise, r2score_regionwise))
+    return((accuracy, r2score_mapwise, r2score_regionwise, predictions))
 
 
 def summarize_performance(performance):
@@ -146,6 +148,7 @@ def summarize_performance(performance):
     accuracy_by_subject = None
     r2_scores_mapwise_df = None
     r2_scores_regionwise = {}
+    predictions = {}
 
     for subject, perf in performance.items():
         acc_values = np.array(list(perf[0].values()))
@@ -184,9 +187,11 @@ def summarize_performance(performance):
             r2_scores_mapwise_df = pd.concat((r2_scores_mapwise_df, r2_subject))
 
         r2_scores_regionwise[subject] = perf[2]
+        predictions[subject] = perf[3]
+
     accuracy_by_subject['subcode'] = accuracy_by_subject.index
     accuracy_df = pd.melt(accuracy_by_subject, id_vars='subcode')
-    return(accuracy_df, r2_scores_mapwise_df, r2_scores_regionwise)
+    return(accuracy_df, r2_scores_mapwise_df, r2_scores_regionwise, predictions)
 
 
 if __name__ == "__main__":
@@ -236,9 +241,11 @@ if __name__ == "__main__":
     with open(outdir / f'peformance_{ontology}_{method}.pkl', 'wb') as f:
         pickle.dump(performance, f)
 
-    accuracy_df, r2_scores_df, r2_scores_mapwise = summarize_performance(performance)
+    accuracy_df, r2_scores_df, r2_scores_regionwise, predictions = summarize_performance(performance)
     accuracy_df.to_csv(outdir / f'accuracy_{ontology}_{method}.csv')
     r2_scores_df.to_csv(outdir / f'r2_mapwise_{ontology}_{method}.csv')
     with open(outdir / f'r2_regionwise_{ontology}_{method}.pkl', 'wb') as f:
-        pickle.dump(r2_scores_mapwise, f)
-    
+        pickle.dump(r2_scores_regionwise, f)
+
+    with open(outdir / f'predictions_{ontology}_{method}.pkl', 'wb') as f:
+        pickle.dump(predictions, f)
