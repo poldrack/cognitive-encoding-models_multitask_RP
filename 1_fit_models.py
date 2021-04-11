@@ -3,20 +3,36 @@
 
 import pickle
 import numpy as np
-import pandas as pd 
+import pandas as pd
 from pathlib import Path
 import pathlib
 import json
-from encoding_model import EncodingModel
 from sklearn.model_selection import LeavePOut
 from sklearn.metrics import r2_score
+import sklearn
+import argparse
+
+from encoding_model import EncodingModel
+from utils import get_prediction_accuracy, get_regionwise_r2score
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-v',"--verbose", help="increase output verbosity",
+                        default=0, action='count')
+    parser.add_argument('-m',"--method", help="regression method",
+                            default='ridgecv')
+    parser.add_argument('-o',"--ontology", help="ontology for model",
+                            default='all')
+    parser.add_argument('-s', "--shuffle", help="shuffle for null model",
+                        action='store_true')
+    return(parser.parse_args())
 
 
 def load_parcellated_maps(datadir, sessioncode, nparcels=1000):
     assert sessioncode in (1, 2)
     if type(datadir) is not pathlib.PosixPath:
         datadir = Path(datadir)
-    
+
     filename = f'all-subs_all-maps_{nparcels}-parcels_sc{sessioncode}.pkl'
     filepath = datadir / filename
     assert filepath.exists()
@@ -64,13 +80,14 @@ def get_aligned_ontology(sub_df, ontology_df):
     return(sub_ontology_df)
 
 
-def fit_encoding_models_l2o(sub_df, sub_ontology_df, method='ridgecv'):
+def fit_encoding_models_l2o(sub_df, sub_ontology_df,
+                            method='ridgecv', shuffle=False):
     """
     fit all encoding models using leave-2-out procedure
 
     Parameters:
         method: 'lr' (linear regression), 'ridgecv' (ridge regression)
-
+        shuffle: if True, column-shuffle the ontology to create null model
     Returns:
         encoding_models (dict): a dict containing encoding model
         for each pair of held-out contrasts, for all ROIs
@@ -79,23 +96,27 @@ def fit_encoding_models_l2o(sub_df, sub_ontology_df, method='ridgecv'):
     encoding_models = {}
     predicted_maps = {}
 
+    # make a copy to prevent corruption of original if we shuffle
+    sub_df_copy = sub_df.copy()
+
     splitter = LeavePOut(2)
 
-    # temp for testing, will replace with sklearn leave n out splitter
     for train_index, test_index in splitter.split(sub_df):
+        if shuffle:
+            sub_df_copy = pd.DataFrame(sklearn.utils.shuffle(sub_df_copy.values), index=sub_df_copy.index)
         train_X, test_X = sub_ontology_df.iloc[train_index, :], sub_ontology_df.iloc[test_index, :]
-        train_Y, test_Y = sub_df.iloc[train_index, :], sub_df.iloc[test_index, :]
+        train_Y, test_Y = sub_df_copy.iloc[train_index, :], sub_df_copy.iloc[test_index, :]
         # confirm indices are aligned
         assert(all(train_X.index == train_Y.index))
         assert(all(test_X.index == test_Y.index))
 
-        # use the sorted list of held out tasks as the index for the model
-        held_out_tasks = tuple(test_X.index.sort_values())
+        # use the list of held out tasks as the index for the model
+        held_out_tasks = tuple(test_X.index)
         encoding_models[held_out_tasks] = EncodingModel(method)
         encoding_models[held_out_tasks].fit(train_X, train_Y)
 
         predicted_maps[held_out_tasks] = encoding_models[held_out_tasks].predict(test_X)
-    
+
     return(encoding_models, predicted_maps)
 
 
@@ -109,19 +130,61 @@ def get_test_performance(predicted, sub_df):
 
     for key, predicted_maps in predicted.items():
         true_maps = sub_df.loc[key, :].values
-        corrs = np.zeros((2, 2))
-        for true_map in range(2):
-            for predicted_map in range(2):
-                corrs[true_map, predicted_map] = np.corrcoef(true_maps[true_map, :], 
-                                                             predicted_maps[predicted_map, :])[0, 1]
-        if (corrs[0, 0] > corrs[1, 0]) and (corrs[1, 1] > corrs[0, 1]):
-            accuracy[key] = 1
-        else:
-            accuracy[key] = 0
-        
+        accuracy[key] = get_prediction_accuracy(predicted_maps, true_maps)
+
         r2score_mapwise[key] = [r2_score(true_maps[0, :], predicted_maps[0, :]),
                                 r2_score(true_maps[1, :], predicted_maps[1, :])]
-    return((accuracy, r2score_mapwise))
+
+    # get regionwise r2score
+    r2score_regionwise = get_regionwise_r2score(predicted, sub_df)
+
+    return((accuracy, r2score_mapwise, r2score_regionwise))
+
+
+def summarize_performance(performance):
+
+    accuracy_by_subject = None
+    r2_scores_df = None
+
+    for subject, perf in performance.items():
+        acc_values = np.array(list(perf[0].values()))
+        acc_keys = list(perf[0].keys())
+
+        if accuracy_by_subject is None:
+            accuracy_by_subject = pd.DataFrame(
+                acc_values.reshape((1, acc_values.shape[0])),
+                columns=acc_keys, index=[subject])
+        else:
+            accuracy_by_subject = pd.concat(
+                (accuracy_by_subject,
+                 pd.DataFrame(acc_values.reshape((1, acc_values.shape[0])),
+                              columns=acc_keys, index=[subject])))
+
+        r2_values = np.array(list(perf[1].values()))
+        r2_values = r2_values.reshape((r2_values.shape[0] * 2, 1))
+        r2_keys_orig = list(perf[1].keys())
+        #  need to duplicate these to correctly index the pairs of r2 scores
+        pair_id = []
+        map_id = []
+        for k in r2_keys_orig:
+            pair_id.append(k)
+            pair_id.append(k)
+            map_id.append(k[0])
+            map_id.append(k[1])
+
+        r2_subject = pd.Series(r2_values[:, 0]).to_frame('r2_score')
+        r2_subject['subcode'] = subject
+        r2_subject['pair_id'] = pair_id
+        r2_subject['map_id'] = map_id
+
+        if r2_scores_df is None:
+            r2_scores_df = r2_subject
+        else:
+            r2_scores_df = pd.concat((r2_scores_df, r2_subject))
+
+    accuracy_by_subject['subcode'] = accuracy_by_subject.index
+    accuracy_df = pd.melt(accuracy_by_subject, id_vars='subcode')
+    return(accuracy_df, r2_scores_df)
 
 
 if __name__ == "__main__":
@@ -130,8 +193,11 @@ if __name__ == "__main__":
     mapdir = datadir_base / 'results/em-0/parcellated_maps'
     resourcedir = datadir_base / 'resources'
 
-    method = 'ridgecv'
-    ontology = 'all'
+    args = parse_args()
+
+    method = args.method
+    ontology = args.ontology
+    shuffle = args.shuffle
 
     ontology_df = load_ontology(resourcedir, ontology)
 
@@ -144,20 +210,30 @@ if __name__ == "__main__":
     performance = {}
 
     for subcode in subcodes:
-        print('fitting models for subject', subcode)
+        if shuffle:
+            print('fitting null models for subject', subcode)
+        else:
+            print('fitting models for subject', subcode)
         sub_df = get_sub_df(maps, subcode)
         sub_ontology_df = get_aligned_ontology(sub_df, ontology_df)
         encoding_models[subcode], predicted_maps[subcode] = fit_encoding_models_l2o(
-            sub_df, sub_ontology_df, method)
+            sub_df, sub_ontology_df, method, shuffle)
 
         performance[subcode] = get_test_performance(predicted_maps[subcode], sub_df)
 
+    if shuffle:
+        ontology = 'null'
+
     outdir = Path('/Users/poldrack/data_unsynced/multitask/encoding_models')
-    with open(outdir / f'encoding_models_{method}.pkl', 'wb') as f:
+    with open(outdir / f'encoding_models_{ontology}_{method}.pkl', 'wb') as f:
         pickle.dump(encoding_models, f)
 
-    with open(outdir / f'predicted_maps_{method}.pkl', 'wb') as f:
+    with open(outdir / f'predicted_maps_{ontology}_{method}.pkl', 'wb') as f:
         pickle.dump(predicted_maps, f)
-    
-    with open(outdir / f'peformance_{method}.pkl', 'wb') as f:
+
+    with open(outdir / f'peformance_{ontology}_{method}.pkl', 'wb') as f:
         pickle.dump(performance, f)
+
+    accuracy_df, r2_scores_df = summarize_performance(performance)
+    accuracy_df.to_csv(outdir / f'accuracy_{ontology}_{method}.csv')
+    r2_scores_df.to_csv(outdir / f'r2_scores_{ontology}_{method}.csv')
